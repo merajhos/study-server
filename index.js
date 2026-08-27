@@ -8,13 +8,12 @@ dotenv.config();
 
 const uri = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 
 const app = express();
 
 app.use(
   cors({
-    origin: [CLIENT_URL, "http://localhost:3000"],
+    origin: [process.env.CLIENT_URL || "http://localhost:3000"],
     credentials: true,
   })
 );
@@ -29,7 +28,8 @@ const client = new MongoClient(uri, {
 });
 
 // JWKS Verification Reference
-const JWKS = createRemoteJWKSet(new URL(`${CLIENT_URL}/api/auth/jwks`));
+const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
 // Safe verifyToken Middleware
 const verifyToken = async (req, res, next) => {
@@ -51,8 +51,7 @@ const verifyToken = async (req, res, next) => {
     return next();
   } catch (error) {
     try {
-      // FIX 1: clientUrl এর জায়গায় CLIENT_URL ব্যবহার করা হলো
-      const authRes = await fetch(`${CLIENT_URL}/api/auth/get-session`, {
+      const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
         headers: {
           cookie: req.headers.cookie || "",
           authorization: `Bearer ${token}`,
@@ -77,9 +76,6 @@ const verifyToken = async (req, res, next) => {
 
 async function run() {
   try {
-    // FIX 2: Vercel-এর জন্য MongoDB কানেক্ট নিশ্চিত করা
-    await client.connect();
-
     const db = client.db("studyNookDB");
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
@@ -117,12 +113,13 @@ async function run() {
       res.json(result);
     });
 
-    // 3. My Listings
+    // 3. My Listings (নিজের এড করা সব রুম দেখার জন্য রাউট)
     app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
+        // ID অথবা Email দুটোর যেকোনো একটা মিললেই রুমগুলো পেয়ে যাবে
         const result = await roomsCollection
           .find({
             $or: [{ ownerId: userId }, { userEmail: userEmail }],
@@ -200,12 +197,13 @@ async function run() {
 
     // ==================== BOOKING ROUTES ====================
 
-    // 8. Get My Bookings
+    // 8. Get My Bookings (ম্যাচিং ফিক্স করা হলো)
     app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
+        // ID অথবা Email দুটো দিয়েই চেক করা হচ্ছে যাতে একটা না মিললেও অন্যটায় খুঁজে পায়
         const bookings = await bookingCollection
           .find({
             $or: [{ userId: userId }, { userEmail: userEmail }],
@@ -229,6 +227,7 @@ async function run() {
           return res.status(400).json({ message: "All booking details are required" });
         }
 
+        // বুকিং সংঘাত চেক
         const existingConflict = await bookingCollection.findOne({
           roomId,
           date,
@@ -312,8 +311,7 @@ async function run() {
     });
 
     console.log("Connected successfully to MongoDB!");
-  } catch (error) {
-    console.error("MongoDB Connection Failed:", error);
+  } finally {
   }
 }
 run().catch(console.dir);

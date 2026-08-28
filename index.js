@@ -27,7 +27,7 @@ const client = new MongoClient(uri, {
   },
 });
 
-// JWKS Verification Reference
+
 const clientUrl = process.env.CLIENT_URL ;
 const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
@@ -80,13 +80,13 @@ async function run() {
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
 
-    // User ID or Email Identifier
+   
     const getUserIdentifier = (user) => {
       return user?.id || user?.sub || user?.email || null;
     };
 
    
-    // 1. Featured Rooms
+    
     app.get("/featured", async (req, res) => {
       const result = await roomsCollection
         .find()
@@ -96,7 +96,7 @@ async function run() {
       res.json(result);
     });
 
-    // 2. All Rooms
+   
     app.get("/rooms", async (req, res) => {
       const { search, amenity } = req.query;
       let query = {};
@@ -112,13 +112,13 @@ async function run() {
       res.json(result);
     });
 
-    // 3. My Listings 
+    
     app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
-        // ID or Email 
+       
         const result = await roomsCollection
           .find({
             $or: [{ ownerId: userId }, { userEmail: userEmail }],
@@ -131,7 +131,7 @@ async function run() {
       }
     });
 
-    // 4. Single Room Details
+   
     app.get("/rooms/:id", async (req, res) => {
       const { id } = req.params;
       try {
@@ -144,7 +144,7 @@ async function run() {
       }
     });
 
-    // 5. Add Room (Protected)
+  
     app.post("/rooms", verifyToken, async (req, res) => {
       const roomData = req.body;
       const userId = getUserIdentifier(req.user);
@@ -160,7 +160,7 @@ async function run() {
       res.json(result);
     });
 
-    // 6. Update Room
+   
     app.patch("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const updatedData = req.body;
@@ -178,7 +178,7 @@ async function run() {
       res.json(result);
     });
 
-    // 7. Delete Room
+   
     app.delete("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const userId = getUserIdentifier(req.user);
@@ -196,7 +196,7 @@ async function run() {
 
   
 
-    // 8.  Bookings from my-bookings
+  
     app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
@@ -216,7 +216,7 @@ async function run() {
       }
     });
 
-    // 9. Create Booking
+   
     app.post("/bookings", verifyToken, async (req, res) => {
       try {
         const { roomId, roomName, date, startTime, endTime, totalCost } = req.body;
@@ -226,7 +226,7 @@ async function run() {
           return res.status(400).json({ message: "All booking details are required" });
         }
 
-        // Booking
+       
         const existingConflict = await bookingCollection.findOne({
           roomId,
           date,
@@ -268,7 +268,7 @@ async function run() {
       }
     });
 
-    // 10. Update / Edit Booking
+    
     app.patch("/bookings/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const { date, startTime, endTime } = req.body;
@@ -295,7 +295,7 @@ async function run() {
       res.json({ success: true, result });
     });
 
-    // 11. Delete Booking
+   
     app.delete("/bookings/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const userId = getUserIdentifier(req.user);

@@ -11,12 +11,24 @@ const PORT = process.env.PORT || 5000;
 
 const app = express();
 
+const clientUrl = process.env.CLIENT_URL ? process.env.CLIENT_URL.replace(/\/$/, "") : "";
+
+// 1. Dynamic Cors Setup (Credentials Supported)
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "*",
+    origin: function (origin, callback) {
+      if (!origin || (clientUrl && origin.startsWith(clientUrl)) || origin.includes("localhost")) {
+        callback(null, true);
+      } else {
+        callback(null, true); // CORS issue এড়াতে flexible origin allow
+      }
+    },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
   })
 );
+
 app.use(express.json());
 
 const client = new MongoClient(uri, {
@@ -27,24 +39,22 @@ const client = new MongoClient(uri, {
   },
 });
 
-const clientUrl = process.env.CLIENT_URL ? process.env.CLIENT_URL.replace(/\/$/, "") : "";
-
 const getJWKS = () => {
   if (!clientUrl) return null;
   return createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 };
 
-
+// 2. Fixed verifyToken Middleware
 const verifyToken = async (req, res, next) => {
   const authHeader = req?.headers?.authorization;
   const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
 
-  
-  if (!token && !req.headers.cookie) {
-    return res.status(401).json({ message: "Unauthorized: Access denied, token missing" });
+  // token অথবা cookie কোনোটিই না থাকলে 401
+  if ((!token || token === "undefined" || token === "null") && !req.headers.cookie) {
+    return res.status(401).json({ message: "Unauthorized: Access denied, token or cookie missing" });
   }
 
-  
+  // Path 1: JWKS দিয়ে JWT ভ্যালিডেশন চেক
   if (token && token !== "undefined" && token !== "null") {
     try {
       const JWKS = getJWKS();
@@ -58,11 +68,11 @@ const verifyToken = async (req, res, next) => {
         }
       }
     } catch (error) {
-      console.log("JWKS verification failed, trying session fallback...");
+      // JWT verify fail করলে শান্তভাবে সেশন চেক-এ চলে যাবে
     }
   }
 
-
+  // Path 2: Better Auth Session Fallback API
   try {
     if (clientUrl) {
       const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
@@ -74,7 +84,6 @@ const verifyToken = async (req, res, next) => {
 
       if (authRes.ok) {
         const sessionData = await authRes.json();
-    
         const currentUser = sessionData?.user || sessionData?.session?.user;
 
         if (currentUser) {

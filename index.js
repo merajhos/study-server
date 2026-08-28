@@ -227,7 +227,7 @@ async function run() {
           return res.status(400).json({ message: "All booking details are required" });
         }
 
-        // বুকিং সংঘাত চেক
+        // Booking
         const existingConflict = await bookingCollection.findOne({
           roomId,
           date,

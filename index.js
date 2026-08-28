@@ -2,7 +2,7 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
+const { createRemoteJWKSet, jwtVerify } = require("jose");
 
 dotenv.config();
 
@@ -41,7 +41,7 @@ app.use(
 app.options("*", cors());
 app.use(express.json());
 
-// 2. Serverless Friendly MongoDB Connection With Timeout (হ্যাং হওয়া রোধ করবে)
+// 2. Serverless Friendly MongoDB Connection With Timeout
 let cachedClient = null;
 let cachedDb = null;
 
@@ -60,7 +60,7 @@ async function connectToDatabase() {
       strict: true,
       deprecationErrors: true,
     },
-    connectTimeoutMS: 5000, // ৫ সেকেন্ডের বেশি কানেকশনে সময় নিলে ক্যানসেল করবে
+    connectTimeoutMS: 5000,
     serverSelectionTimeoutMS: 5000,
   });
 
@@ -81,7 +81,7 @@ const getJWKS = () => {
   }
 };
 
-// 3. Fast Verification Middleware (With Fetch Controller Timeout)
+// 3. Fast Verification Middleware
 const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req?.headers?.authorization;
@@ -112,10 +112,10 @@ const verifyToken = async (req, res, next) => {
       }
     }
 
-    // ২. Better Auth Session API (অতিরিক্ত ৩ সেকেন্ডের Timeout যুক্ত করা হলো)
+    // ২. Better Auth Session API
     if (clientUrl) {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000); // ৩ সেকেন্ডে রেসপন্স না পেলে Abort করবে
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
 
       try {
         const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {

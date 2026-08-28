@@ -2,19 +2,18 @@ const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const { createRemoteJWKSet, jwtVerify } = require("jose");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 dotenv.config();
 
 const uri = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 5000;
-const clientUrl = process.env.CLIENT_URL;
 
 const app = express();
 
 app.use(
   cors({
-    origin: [clientUrl, "http://localhost:3000", "http://localhost:5173"].filter(Boolean),
+    origin: [process.env.CLIENT_URL],
     credentials: true,
   })
 );
@@ -28,14 +27,9 @@ const client = new MongoClient(uri, {
   },
 });
 
-// JWKS Verification Reference (Lazy loaded to prevent runtime initialization crash)
-let JWKS = null;
-const getJWKS = () => {
-  if (!JWKS && clientUrl) {
-    JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
-  }
-  return JWKS;
-};
+// JWKS Verification Reference
+const clientUrl = process.env.CLIENT_URL ;
+const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
 // Safe verifyToken Middleware
 const verifyToken = async (req, res, next) => {
@@ -50,30 +44,25 @@ const verifyToken = async (req, res, next) => {
   }
 
   try {
-    const keySet = getJWKS();
-    if (keySet) {
-      const { payload } = await jwtVerify(token, keySet, {
-        algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
-      });
-      req.user = payload;
-      return next();
-    }
+    const { payload } = await jwtVerify(token, JWKS, {
+      algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
+    });
+    req.user = payload;
+    return next();
   } catch (error) {
     try {
-      if (clientUrl) {
-        const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
-          headers: {
-            cookie: req.headers.cookie || "",
-            authorization: `Bearer ${token}`,
-          },
-        });
+      const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
+        headers: {
+          cookie: req.headers.cookie || "",
+          authorization: `Bearer ${token}`,
+        },
+      });
 
-        if (authRes.ok) {
-          const sessionData = await authRes.json();
-          if (sessionData?.user) {
-            req.user = sessionData.user;
-            return next();
-          }
+      if (authRes.ok) {
+        const sessionData = await authRes.json();
+        if (sessionData?.user) {
+          req.user = sessionData.user;
+          return next();
         }
       }
     } catch (sessionErr) {
@@ -87,56 +76,49 @@ const verifyToken = async (req, res, next) => {
 
 async function run() {
   try {
-    await client.connect();
     const db = client.db("studyNookDB");
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
 
-    // User ID or Email Identifier
+    //  User ID or Email Identifier
     const getUserIdentifier = (user) => {
       return user?.id || user?.sub || user?.email || null;
     };
 
+   
     // 1. Featured Rooms
     app.get("/featured", async (req, res) => {
-      try {
-        const result = await roomsCollection
-          .find()
-          .sort({ _id: -1 })
-          .limit(6)
-          .toArray();
-        res.json(result);
-      } catch (error) {
-        res.status(500).json({ message: "Failed to fetch featured rooms" });
-      }
+      const result = await roomsCollection
+        .find()
+        .sort({ _id: -1 })
+        .limit(6)
+        .toArray();
+      res.json(result);
     });
 
     // 2. All Rooms
     app.get("/rooms", async (req, res) => {
-      try {
-        const { search, amenity } = req.query;
-        let query = {};
+      const { search, amenity } = req.query;
+      let query = {};
 
-        if (search) {
-          query.name = { $regex: search, $options: "i" };
-        }
-        if (amenity) {
-          query.amenities = { $in: [amenity] };
-        }
-
-        const result = await roomsCollection.find(query).toArray();
-        res.json(result);
-      } catch (error) {
-        res.status(500).json({ message: "Failed to fetch rooms" });
+      if (search) {
+        query.name = { $regex: search, $options: "i" };
       }
+      if (amenity) {
+        query.amenities = { $in: [amenity] };
+      }
+
+      const result = await roomsCollection.find(query).toArray();
+      res.json(result);
     });
 
-    // 3. My Listings
+    // 3. My Listings 
     app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
+        // ID or Email 
         const result = await roomsCollection
           .find({
             $or: [{ ownerId: userId }, { userEmail: userEmail }],
@@ -164,72 +146,63 @@ async function run() {
 
     // 5. Add Room (Protected)
     app.post("/rooms", verifyToken, async (req, res) => {
-      try {
-        const roomData = req.body;
-        const userId = getUserIdentifier(req.user);
+      const roomData = req.body;
+      const userId = getUserIdentifier(req.user);
 
-        const newRoom = {
-          ...roomData,
-          ownerId: userId,
-          userEmail: req.user?.email || "",
-          bookingCount: 0,
-          createdAt: new Date(),
-        };
-        const result = await roomsCollection.insertOne(newRoom);
-        res.json(result);
-      } catch (error) {
-        res.status(500).json({ message: "Failed to create room" });
-      }
+      const newRoom = {
+        ...roomData,
+        ownerId: userId,
+        userEmail: req.user?.email || "",
+        bookingCount: 0,
+        createdAt: new Date(),
+      };
+      const result = await roomsCollection.insertOne(newRoom);
+      res.json(result);
     });
 
     // 6. Update Room
     app.patch("/rooms/:id", verifyToken, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const updatedData = req.body;
-        const userId = getUserIdentifier(req.user);
+      const { id } = req.params;
+      const updatedData = req.body;
+      const userId = getUserIdentifier(req.user);
 
-        const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
-        if (!room || (room.ownerId !== userId && room.userEmail !== req.user?.email)) {
-          return res.status(403).json({ message: "Forbidden: Not room owner" });
-        }
-
-        const result = await roomsCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: updatedData }
-        );
-        res.json(result);
-      } catch (error) {
-        res.status(500).json({ message: "Failed to update room" });
+      const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
+      if (!room || (room.ownerId !== userId && room.userEmail !== req.user?.email)) {
+        return res.status(403).json({ message: "Forbidden: Not room owner" });
       }
+
+      const result = await roomsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updatedData }
+      );
+      res.json(result);
     });
 
     // 7. Delete Room
     app.delete("/rooms/:id", verifyToken, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const userId = getUserIdentifier(req.user);
+      const { id } = req.params;
+      const userId = getUserIdentifier(req.user);
 
-        const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
-        if (!room || (room.ownerId !== userId && room.userEmail !== req.user?.email)) {
-          return res.status(403).json({ message: "Forbidden: Not room owner" });
-        }
-
-        const result = await roomsCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.json(result);
-      } catch (error) {
-        res.status(500).json({ message: "Failed to delete room" });
+      const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
+      if (!room || (room.ownerId !== userId && room.userEmail !== req.user?.email)) {
+        return res.status(403).json({ message: "Forbidden: Not room owner" });
       }
+
+      const result = await roomsCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.json(result);
     });
 
-    // 8. Bookings from my-bookings
+  
+
+    // 8.  Bookings from my-bookings
     app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
+        // ID or Email 
         const bookings = await bookingCollection
           .find({
             $or: [{ userId: userId }, { userEmail: userEmail }],
@@ -253,6 +226,7 @@ async function run() {
           return res.status(400).json({ message: "All booking details are required" });
         }
 
+        // Booking
         const existingConflict = await bookingCollection.findOne({
           roomId,
           date,
@@ -296,68 +270,55 @@ async function run() {
 
     // 10. Update / Edit Booking
     app.patch("/bookings/:id", verifyToken, async (req, res) => {
-      try {        const { id } = req.params;
-        const { date, startTime, endTime } = req.body;
-        const userId = getUserIdentifier(req.user);
+      const { id } = req.params;
+      const { date, startTime, endTime } = req.body;
+      const userId = getUserIdentifier(req.user);
 
-        const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
-        if (!booking || (booking.userId !== userId && booking.userEmail !== req.user?.email)) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
-
-        const updateFields = {};
-        if (date) updateFields.date = date;
-        if (startTime && endTime) {
-          updateFields.startTime = startTime;
-          updateFields.endTime = endTime;
-          updateFields.timeSlot = `${startTime} - ${endTime}`;
-        }
-
-        const result = await bookingCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: updateFields }
-        );
-
-        res.json({ success: true, result });
-      } catch (error) {
-        res.status(500).json({ message: "Failed to update booking" });
+      const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
+      if (!booking || (booking.userId !== userId && booking.userEmail !== req.user?.email)) {
+        return res.status(403).json({ message: "Forbidden" });
       }
+
+      const updateFields = {};
+      if (date) updateFields.date = date;
+      if (startTime && endTime) {
+        updateFields.startTime = startTime;
+        updateFields.endTime = endTime;
+        updateFields.timeSlot = `${startTime} - ${endTime}`;
+      }
+
+      const result = await bookingCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updateFields }
+      );
+
+      res.json({ success: true, result });
     });
 
     // 11. Delete Booking
     app.delete("/bookings/:id", verifyToken, async (req, res) => {
-      try {
-        const { id } = req.params;
-        const userId = getUserIdentifier(req.user);
+      const { id } = req.params;
+      const userId = getUserIdentifier(req.user);
 
-        const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
-        if (!booking || (booking.userId !== userId && booking.userEmail !== req.user?.email)) {
-          return res.status(403).json({ message: "Forbidden" });
-        }
-
-        const result = await bookingCollection.deleteOne({ _id: new ObjectId(id) });
-        res.json({ success: true, result });
-      } catch (error) {
-        res.status(500).json({ message: "Failed to delete booking" });
+      const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
+      if (!booking || (booking.userId !== userId && booking.userEmail !== req.user?.email)) {
+        return res.status(403).json({ message: "Forbidden" });
       }
+
+      const result = await bookingCollection.deleteOne({ _id: new ObjectId(id) });
+      res.json({ success: true, result });
     });
 
     console.log("Connected successfully to MongoDB!");
-  } catch (err) {
-    console.error("Database initialization error:", err);
+  } finally {
   }
 }
-
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
   res.send("StudyNook Server is running fine!");
 });
 
-if (process.env.NODE_ENV !== "production") {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-}
-
-module.exports = app;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

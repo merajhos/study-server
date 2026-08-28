@@ -195,15 +195,15 @@ async function run() {
       res.json(result);
     });
 
-    // ==================== BOOKING ROUTES ====================
+  
 
-    // 8. Get My Bookings (ম্যাচিং ফিক্স করা হলো)
+    // 8. Get My Bookings 
     app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
-        // ID অথবা Email দুটো দিয়েই চেক করা হচ্ছে যাতে একটা না মিললেও অন্যটায় খুঁজে পায়
+        // ID or Email 
         const bookings = await bookingCollection
           .find({
             $or: [{ userId: userId }, { userEmail: userEmail }],

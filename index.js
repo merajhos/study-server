@@ -33,50 +33,42 @@ const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
 // Safe verifyToken Middleware
 const verifyToken = async (req, res, next) => {
-  const authHeader = req?.headers?.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ message: "Unauthorized: No token provided" });
-  }
-
-  const token = authHeader.split(" ")[1];
-  if (!token || token === "undefined" || token === "null") {
-    return res.status(401).json({ message: "Unauthorized: Invalid token format" });
-  }
-
   try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader) {
+      return res.status(401).json({
+        message: "Unauthorized: No token provided",
+      });
+    }
+
+    const [type, token] = authHeader.split(" ");
+
+    if (type !== "Bearer" || !token) {
+      return res.status(401).json({
+        message: "Unauthorized: Invalid token format",
+      });
+    }
+
     const { payload } = await jwtVerify(token, JWKS, {
       algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
     });
+
     req.user = payload;
-    return next();
+
+    next();
   } catch (error) {
-    try {
-      const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
-        headers: {
-          cookie: req.headers.cookie || "",
-          authorization: `Bearer ${token}`,
-        },
-      });
+    console.error("Authentication Error:", error);
 
-      if (authRes.ok) {
-        const sessionData = await authRes.json();
-        if (sessionData?.user) {
-          req.user = sessionData.user;
-          return next();
-        }
-      }
-    } catch (sessionErr) {
-      console.error("Session fetch failed:", sessionErr.message);
-    }
-
-    console.error("JWT Verification Error:", error.message);
-    return res.status(403).json({ message: "Forbidden: Token verification failed" });
+    return res.status(401).json({
+      message: "Unauthorized: Invalid or expired token",
+    });
   }
 };
 
 async function run() {
   try {
-    const db = client.db("studyNookDB");
+    const db = client.db("studynook");
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
 
@@ -145,20 +137,51 @@ async function run() {
     });
 
     // 5. Add Room (Protected)
-    app.post("/rooms", verifyToken, async (req, res) => {
-      const roomData = req.body;
-      const userId = getUserIdentifier(req.user);
+ app.post("/rooms", verifyToken, async (req, res) => {
+  try {
+    const roomData = req.body;
 
-      const newRoom = {
-        ...roomData,
-        ownerId: userId,
-        userEmail: req.user?.email || "",
-        bookingCount: 0,
-        createdAt: new Date(),
-      };
-      const result = await roomsCollection.insertOne(newRoom);
-      res.json(result);
+    if (!roomData.name || !roomData.description) {
+      return res.status(400).json({
+        success: false,
+        message: "Room name and description are required",
+      });
+    }
+
+    const userId = getUserIdentifier(req.user);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "User information not found",
+      });
+    }
+
+    const newRoom = {
+      ...roomData,
+      ownerId: userId,
+      userEmail: req.user?.email || "",
+      bookingCount: 0,
+      createdAt: new Date(),
+    };
+
+    const result = await roomsCollection.insertOne(newRoom);
+
+    return res.status(201).json({
+      success: true,
+      message: "Room added successfully",
+      insertedId: result.insertedId,
     });
+  } catch (error) {
+    console.error("POST /rooms ERROR:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to add room",
+      error: error.message,
+    });
+  }
+});
 
     // 6. Update Room
     app.patch("/rooms/:id", verifyToken, async (req, res) => {
@@ -316,7 +339,9 @@ async function run() {
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("StudyNook Server is running fine!");
+  res.status(200).json({
+    message: "studentno backend is running!",
+  });
 });
 
 app.listen(PORT, () => {

@@ -15,7 +15,7 @@ const clientUrl = process.env.CLIENT_URL
   ? process.env.CLIENT_URL.replace(/\/$/, "") 
   : "https://studybook-sand.vercel.app";
 
-// 1. Fixed CORS Setup with Preflight Support
+// 1. CORS Setup
 const allowedOrigins = [
   clientUrl,
   "https://studybook-sand.vercel.app",
@@ -38,12 +38,10 @@ app.use(
   })
 );
 
-// Preflight OPTIONS Request handling
 app.options("*", cors());
-
 app.use(express.json());
 
-// 2. Serverless Friendly MongoDB Connection Caching
+// 2. Serverless Friendly MongoDB Connection With Timeout (হ্যাং হওয়া রোধ করবে)
 let cachedClient = null;
 let cachedDb = null;
 
@@ -52,12 +50,18 @@ async function connectToDatabase() {
     return { client: cachedClient, db: cachedDb };
   }
 
+  if (!uri) {
+    throw new Error("MONGODB_URI is not defined in environment variables.");
+  }
+
   const client = new MongoClient(uri, {
     serverApi: {
       version: ServerApiVersion.v1,
       strict: true,
       deprecationErrors: true,
     },
+    connectTimeoutMS: 5000, // ৫ সেকেন্ডের বেশি কানেকশনে সময় নিলে ক্যানসেল করবে
+    serverSelectionTimeoutMS: 5000,
   });
 
   await client.connect();
@@ -77,7 +81,7 @@ const getJWKS = () => {
   }
 };
 
-// 3. Robust Token & Session Verification Middleware
+// 3. Fast Verification Middleware (With Fetch Controller Timeout)
 const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req?.headers?.authorization;
@@ -90,7 +94,7 @@ const verifyToken = async (req, res, next) => {
       return res.status(401).json({ message: "Unauthorized: Access denied, token or cookie missing" });
     }
 
-    // ১. JWKS / JWT দিয়ে ভ্যালিডেশন
+    // ১. JWKS / JWT ভ্যালিডেশন
     if (hasValidToken) {
       try {
         const JWKS = getJWKS();
@@ -104,27 +108,38 @@ const verifyToken = async (req, res, next) => {
           }
         }
       } catch (jwtErr) {
-        console.log("JWT Verification bypassed, falling back to session API...");
+        console.log("JWT Verification bypassed, checking session fallback...");
       }
     }
 
-    // ২. Better Auth Session API দিয়ে ভ্যালিডেশন
+    // ২. Better Auth Session API (অতিরিক্ত ৩ সেকেন্ডের Timeout যুক্ত করা হলো)
     if (clientUrl) {
-      const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
-        headers: {
-          cookie: req.headers.cookie || "",
-          authorization: hasValidToken ? `Bearer ${token}` : "",
-        },
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // ৩ সেকেন্ডে রেসপন্স না পেলে Abort করবে
 
-      if (authRes.ok) {
-        const sessionData = await authRes.json();
-        const currentUser = sessionData?.user || sessionData?.session?.user;
+      try {
+        const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
+          headers: {
+            cookie: req.headers.cookie || "",
+            authorization: hasValidToken ? `Bearer ${token}` : "",
+          },
+          signal: controller.signal,
+        });
 
-        if (currentUser) {
-          req.user = currentUser;
-          return next();
+        clearTimeout(timeoutId);
+
+        if (authRes.ok) {
+          const sessionData = await authRes.json();
+          const currentUser = sessionData?.user || sessionData?.session?.user;
+
+          if (currentUser) {
+            req.user = currentUser;
+            return next();
+          }
         }
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        console.error("Session Fetch Timeout/Error:", fetchErr.message);
       }
     }
 
@@ -146,8 +161,8 @@ app.use(async (req, res, next) => {
     req.db = db;
     next();
   } catch (err) {
-    console.error("Database connection failed:", err);
-    res.status(500).json({ message: "Database connection failed" });
+    console.error("Database connection failed:", err.message);
+    res.status(500).json({ message: "Database connection failed", error: err.message });
   }
 });
 

@@ -13,7 +13,7 @@ const app = express();
 
 app.use(
   cors({
-    origin: [process.env.CLIENT_URL || "http://localhost:3000"],
+    origin: [process.env.CLIENT_URL],
     credentials: true,
   })
 );
@@ -28,7 +28,7 @@ const client = new MongoClient(uri, {
 });
 
 // JWKS Verification Reference
-const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+const clientUrl = process.env.CLIENT_URL ;
 const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
 // Safe verifyToken Middleware
@@ -85,7 +85,7 @@ async function run() {
       return user?.id || user?.sub || user?.email || null;
     };
 
-    // ==================== ROOMS ROUTES ====================
+   
 
     // 1. Featured Rooms
     app.get("/featured", async (req, res) => {

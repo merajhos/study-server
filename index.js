@@ -113,13 +113,13 @@ async function run() {
       res.json(result);
     });
 
-    // 3. My Listings (নিজের এড করা সব রুম দেখার জন্য রাউট)
+    // 3. My Listings 
     app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
-        // ID অথবা Email দুটোর যেকোনো একটা মিললেই রুমগুলো পেয়ে যাবে
+        // ID or Email 
         const result = await roomsCollection
           .find({
             $or: [{ ownerId: userId }, { userEmail: userEmail }],

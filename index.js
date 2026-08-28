@@ -10,13 +10,17 @@ const uri = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 5000;
 
 const app = express();
-const clientUrl = process.env.CLIENT_URL ? process.env.CLIENT_URL.replace(/\/$/, "") : "";
+
+// clientUrl এর শেষে কোনো স্ল্যাশ (/) থাকলে তা সরিয়ে নেওয়া এবং ব্যাকআপ ডোমেন রাখা
+const clientUrl = process.env.CLIENT_URL 
+  ? process.env.CLIENT_URL.replace(/\/$/, "") 
+  : "https://studybook-sand.vercel.app";
 
 // 1. CORS Setup
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || (clientUrl && origin.startsWith(clientUrl)) || origin.includes("localhost")) {
+      if (!origin || origin.startsWith(clientUrl) || origin.includes("localhost")) {
         callback(null, true);
       } else {
         callback(null, true);
@@ -48,7 +52,7 @@ async function connectToDatabase() {
   });
 
   await client.connect();
-  const db = client.db("studynook"); // আপনার বর্তমান ডাটাবেজের নাম
+  const db = client.db("studynook");
 
   cachedClient = client;
   cachedDb = db;
@@ -57,41 +61,51 @@ async function connectToDatabase() {
 
 const getJWKS = () => {
   if (!clientUrl) return null;
-  return createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
+  try {
+    return createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
+  } catch (err) {
+    return null;
+  }
 };
 
-// 3. Token & Session Verification Middleware
+// 3. Robust Token & Session Verification Middleware
 const verifyToken = async (req, res, next) => {
-  const authHeader = req?.headers?.authorization;
-  const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
-
-  if ((!token || token === "undefined" || token === "null") && !req.headers.cookie) {
-    return res.status(401).json({ message: "Unauthorized: Access denied, token or cookie missing" });
-  }
-
-  if (token && token !== "undefined" && token !== "null") {
-    try {
-      const JWKS = getJWKS();
-      if (JWKS) {
-        const { payload } = await jwtVerify(token, JWKS, {
-          algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
-        });
-        if (payload) {
-          req.user = payload;
-          return next();
-        }
-      }
-    } catch (error) {
-      // Fallback to Session Verification
-    }
-  }
-
   try {
+    const authHeader = req?.headers?.authorization;
+    const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+
+    // টোকেন বা কুকির অস্তিত্ব যাচাই (invalid string চেকসহ)
+    const hasValidToken = token && token !== "undefined" && token !== "null" && token.trim() !== "";
+    const hasCookie = !!req.headers.cookie;
+
+    if (!hasValidToken && !hasCookie) {
+      return res.status(401).json({ message: "Unauthorized: Access denied, token or cookie missing" });
+    }
+
+    // ১. JWKS / JWT দিয়ে ভ্যালিডেশন
+    if (hasValidToken) {
+      try {
+        const JWKS = getJWKS();
+        if (JWKS) {
+          const { payload } = await jwtVerify(token, JWKS, {
+            algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
+          });
+          if (payload) {
+            req.user = payload;
+            return next();
+          }
+        }
+      } catch (jwtErr) {
+        console.log("JWT Verification bypassed, falling back to session API...");
+      }
+    }
+
+    // ২. Better Auth Session API দিয়ে ভ্যালিডেশন
     if (clientUrl) {
       const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
         headers: {
           cookie: req.headers.cookie || "",
-          authorization: token ? `Bearer ${token}` : "",
+          authorization: hasValidToken ? `Bearer ${token}` : "",
         },
       });
 
@@ -105,18 +119,19 @@ const verifyToken = async (req, res, next) => {
         }
       }
     }
-  } catch (sessionErr) {
-    console.error("Session fetch failed:", sessionErr.message);
-  }
 
-  return res.status(403).json({ message: "Forbidden: Token verification failed" });
+    return res.status(403).json({ message: "Forbidden: Token verification failed" });
+  } catch (error) {
+    console.error("Auth Middleware Error:", error.message);
+    return res.status(403).json({ message: "Forbidden: Internal auth error" });
+  }
 };
 
 const getUserIdentifier = (user) => {
   return user?.id || user?.sub || user?.email || null;
 };
 
-// Helper middleware for DB connection injection
+// Database connection injection middleware
 app.use(async (req, res, next) => {
   try {
     const { db } = await connectToDatabase();
@@ -341,7 +356,7 @@ app.patch("/bookings/:id", verifyToken, async (req, res) => {
 
     const result = await bookingCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: updateFields }
+      { $set: updatedData: updateFields }
     );
 
     res.json({ success: true, result });

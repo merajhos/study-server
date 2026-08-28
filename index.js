@@ -80,13 +80,12 @@ async function run() {
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
 
-    // Helper function: User ID or Email Identifier
+    // User ID or Email Identifier
     const getUserIdentifier = (user) => {
       return user?.id || user?.sub || user?.email || null;
     };
 
    
-
     // 1. Featured Rooms
     app.get("/featured", async (req, res) => {
       const result = await roomsCollection
@@ -197,7 +196,7 @@ async function run() {
 
   
 
-    // 8. Get My Bookings 
+    // 8.  Bookings from my-bookings
     app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);

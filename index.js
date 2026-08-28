@@ -11,16 +11,22 @@ const PORT = process.env.PORT || 5000;
 
 const app = express();
 
-// clientUrl এর শেষে কোনো স্ল্যাশ (/) থাকলে তা সরিয়ে নেওয়া এবং ব্যাকআপ ডোমেন রাখা
 const clientUrl = process.env.CLIENT_URL 
   ? process.env.CLIENT_URL.replace(/\/$/, "") 
   : "https://studybook-sand.vercel.app";
 
-// 1. CORS Setup
+// 1. Fixed CORS Setup with Preflight Support
+const allowedOrigins = [
+  clientUrl,
+  "https://studybook-sand.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:5173"
+];
+
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || origin.startsWith(clientUrl) || origin.includes("localhost")) {
+      if (!origin || allowedOrigins.includes(origin) || origin.includes("localhost")) {
         callback(null, true);
       } else {
         callback(null, true);
@@ -28,9 +34,12 @@ app.use(
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
   })
 );
+
+// Preflight OPTIONS Request handling
+app.options("*", cors());
 
 app.use(express.json());
 
@@ -74,7 +83,6 @@ const verifyToken = async (req, res, next) => {
     const authHeader = req?.headers?.authorization;
     const token = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
 
-    // টোকেন বা কুকির অস্তিত্ব যাচাই (invalid string চেকসহ)
     const hasValidToken = token && token !== "undefined" && token !== "null" && token.trim() !== "";
     const hasCookie = !!req.headers.cookie;
 
@@ -356,7 +364,7 @@ app.patch("/bookings/:id", verifyToken, async (req, res) => {
 
     const result = await bookingCollection.updateOne(
       { _id: new ObjectId(id) },
-      { $set: updatedData: updateFields }
+      { $set: updateFields }
     );
 
     res.json({ success: true, result });

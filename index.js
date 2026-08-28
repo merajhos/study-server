@@ -32,9 +32,48 @@ const clientUrl = process.env.CLIENT_URL ;
 const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
 // Safe verifyToken Middleware
+// const verifyToken = async (req, res, next) => {
+//   try {
+//     const authHeader = req.headers.authorization;
+
+//     console.log("Authorization:", authHeader);
+
+//     if (!authHeader) {
+//       return res.status(401).json({
+//         message: "Unauthorized: No token provided",
+//       });
+//     }
+
+//     const [type, token] = authHeader.split(" ");
+
+//     if (type !== "Bearer" || !token) {
+//       return res.status(401).json({
+//         message: "Unauthorized: Invalid token format",
+//       });
+//     }
+
+//     const { payload } = await jwtVerify(token, JWKS, {
+//       algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
+//     });
+
+//     console.log("JWT Payload:", payload);
+
+//     req.user = payload;
+
+//     next();
+//   } catch (error) {
+//     console.error("JWT ERROR:", error);
+
+//     return res.status(401).json({
+//       message: "Unauthorized: Invalid or expired token",
+//     });
+//   }
+// };
 const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
+
+    console.log("AUTH HEADER:", authHeader ? "Token received" : "NO TOKEN");
 
     if (!authHeader) {
       return res.status(401).json({
@@ -52,16 +91,25 @@ const verifyToken = async (req, res, next) => {
 
     const { payload } = await jwtVerify(token, JWKS, {
       algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
+      issuer: process.env.CLIENT_URL,
+      audience: process.env.CLIENT_URL,
     });
 
-    req.user = payload;
+    console.log("JWT PAYLOAD:", payload);
 
+    req.user = payload;
     next();
+
   } catch (error) {
-    console.error("Authentication Error:", error);
+    console.error("========== JWT ERROR ==========");
+    console.error("NAME:", error.name);
+    console.error("MESSAGE:", error.message);
+    console.error("CODE:", error.code);
+    console.error("==============================");
 
     return res.status(401).json({
       message: "Unauthorized: Invalid or expired token",
+      error: error.message,
     });
   }
 };

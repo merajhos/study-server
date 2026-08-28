@@ -101,7 +101,7 @@ const verifyToken = async (req, res, next) => {
 
 async function run() {
   try {
-    const db = client.db("studyNookDB");
+    const db = client.db("studynook");
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
 

@@ -11,9 +11,10 @@ const PORT = process.env.PORT || 5000;
 
 const app = express();
 
+
 app.use(
   cors({
-    origin: [process.env.CLIENT_URL],
+    origin: process.env.CLIENT_URL || "*",
     credentials: true,
   })
 );
@@ -27,11 +28,15 @@ const client = new MongoClient(uri, {
   },
 });
 
+const clientUrl = process.env.CLIENT_URL ? process.env.CLIENT_URL.replace(/\/$/, "") : "";
 
-const clientUrl = process.env.CLIENT_URL ;
-const JWKS = createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
 
-// Safe verifyToken Middleware
+const getJWKS = () => {
+  if (!clientUrl) return null;
+  return createRemoteJWKSet(new URL(`${clientUrl}/api/auth/jwks`));
+};
+
+
 const verifyToken = async (req, res, next) => {
   const authHeader = req?.headers?.authorization;
   if (!authHeader) {
@@ -43,35 +48,41 @@ const verifyToken = async (req, res, next) => {
     return res.status(401).json({ message: "Unauthorized: Invalid token format" });
   }
 
+ 
   try {
-    const { payload } = await jwtVerify(token, JWKS, {
-      algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
-    });
-    req.user = payload;
-    return next();
-  } catch (error) {
-    try {
-      const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
-        headers: {
-          cookie: req.headers.cookie || "",
-          authorization: `Bearer ${token}`,
-        },
+    const JWKS = getJWKS();
+    if (JWKS) {
+      const { payload } = await jwtVerify(token, JWKS, {
+        algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
       });
-
-      if (authRes.ok) {
-        const sessionData = await authRes.json();
-        if (sessionData?.user) {
-          req.user = sessionData.user;
-          return next();
-        }
-      }
-    } catch (sessionErr) {
-      console.error("Session fetch failed:", sessionErr.message);
+      req.user = payload;
+      return next();
     }
-
-    console.error("JWT Verification Error:", error.message);
-    return res.status(403).json({ message: "Forbidden: Token verification failed" });
+  } catch (error) {
+    console.log("JWKS verification bypassed/failed, falling back to session endpoint...");
   }
+
+
+  try {
+    const authRes = await fetch(`${clientUrl}/api/auth/get-session`, {
+      headers: {
+        cookie: req.headers.cookie || "",
+        authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (authRes.ok) {
+      const sessionData = await authRes.json();
+      if (sessionData?.user) {
+        req.user = sessionData.user;
+        return next();
+      }
+    }
+  } catch (sessionErr) {
+    console.error("Session fetch failed:", sessionErr.message);
+  }
+
+  return res.status(403).json({ message: "Forbidden: Token verification failed" });
 };
 
 async function run() {
@@ -80,13 +91,10 @@ async function run() {
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
 
-   
     const getUserIdentifier = (user) => {
       return user?.id || user?.sub || user?.email || null;
     };
 
-   
-    
     app.get("/featured", async (req, res) => {
       const result = await roomsCollection
         .find()
@@ -96,7 +104,6 @@ async function run() {
       res.json(result);
     });
 
-   
     app.get("/rooms", async (req, res) => {
       const { search, amenity } = req.query;
       let query = {};
@@ -112,13 +119,11 @@ async function run() {
       res.json(result);
     });
 
-    
     app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
-       
         const result = await roomsCollection
           .find({
             $or: [{ ownerId: userId }, { userEmail: userEmail }],
@@ -131,7 +136,6 @@ async function run() {
       }
     });
 
-   
     app.get("/rooms/:id", async (req, res) => {
       const { id } = req.params;
       try {
@@ -144,23 +148,25 @@ async function run() {
       }
     });
 
-  
     app.post("/rooms", verifyToken, async (req, res) => {
-      const roomData = req.body;
-      const userId = getUserIdentifier(req.user);
+      try {
+        const roomData = req.body;
+        const userId = getUserIdentifier(req.user);
 
-      const newRoom = {
-        ...roomData,
-        ownerId: userId,
-        userEmail: req.user?.email || "",
-        bookingCount: 0,
-        createdAt: new Date(),
-      };
-      const result = await roomsCollection.insertOne(newRoom);
-      res.json(result);
+        const newRoom = {
+          ...roomData,
+          ownerId: userId,
+          userEmail: req.user?.email || "",
+          bookingCount: 0,
+          createdAt: new Date(),
+        };
+        const result = await roomsCollection.insertOne(newRoom);
+        res.json(result);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to create room", error: error.message });
+      }
     });
 
-   
     app.patch("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const updatedData = req.body;
@@ -178,7 +184,6 @@ async function run() {
       res.json(result);
     });
 
-   
     app.delete("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const userId = getUserIdentifier(req.user);
@@ -194,15 +199,11 @@ async function run() {
       res.json(result);
     });
 
-  
-
-  
     app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
       try {
         const userId = getUserIdentifier(req.user);
         const userEmail = req.user?.email;
 
-        // ID or Email 
         const bookings = await bookingCollection
           .find({
             $or: [{ userId: userId }, { userEmail: userEmail }],
@@ -216,7 +217,6 @@ async function run() {
       }
     });
 
-   
     app.post("/bookings", verifyToken, async (req, res) => {
       try {
         const { roomId, roomName, date, startTime, endTime, totalCost } = req.body;
@@ -226,7 +226,6 @@ async function run() {
           return res.status(400).json({ message: "All booking details are required" });
         }
 
-       
         const existingConflict = await bookingCollection.findOne({
           roomId,
           date,
@@ -268,7 +267,6 @@ async function run() {
       }
     });
 
-    
     app.patch("/bookings/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const { date, startTime, endTime } = req.body;
@@ -295,7 +293,6 @@ async function run() {
       res.json({ success: true, result });
     });
 
-   
     app.delete("/bookings/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const userId = getUserIdentifier(req.user);
@@ -310,7 +307,8 @@ async function run() {
     });
 
     console.log("Connected successfully to MongoDB!");
-  } finally {
+  } catch (error) {
+    console.error("MongoDB Connection Error:", error);
   }
 }
 run().catch(console.dir);

@@ -429,15 +429,22 @@ const app = express();
 
 const clientUrl = process.env.CLIENT_URL || "https://studybook-sand.vercel.app";
 
+// CORS Configuration
 app.use(
   cors({
-    origin: [clientUrl, "http://localhost:3000"],
+    origin: [
+      clientUrl,
+      "https://studybook-sand.vercel.app",
+      "http://localhost:3000",
+      "http://localhost:5173",
+    ],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 app.use(express.json());
 
+// MongoDB Client
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -446,9 +453,15 @@ const client = new MongoClient(uri, {
   },
 });
 
-// JWKS Verification Reference
+// JWKS Verification Helper
 const cleanClientUrl = clientUrl.replace(/\/$/, "");
-const JWKS = createRemoteJWKSet(new URL(`${cleanClientUrl}/api/auth/jwks`));
+let JWKS;
+
+try {
+  JWKS = createRemoteJWKSet(new URL(`${cleanClientUrl}/api/auth/jwks`));
+} catch (err) {
+  console.error("Failed to initialize JWKS remote URL:", err.message);
+}
 
 // Safe verifyToken Middleware
 const verifyToken = async (req, res, next) => {
@@ -461,12 +474,15 @@ const verifyToken = async (req, res, next) => {
 
     const [type, token] = authHeader.split(" ");
 
-    if (type !== "Bearer" || !token || token === "undefined") {
+    if (type !== "Bearer" || !token || token === "undefined" || token === "null") {
       return res.status(401).json({ message: "Unauthorized: Invalid token format" });
     }
 
-    // JWKS দিয়ে ভেরিফাই করুন
-    const { payload } = await jwtVerify(token, JWKS, {
+    // fallback set dynamically if JWKS failed initially
+    const currentJwks = JWKS || createRemoteJWKSet(new URL(`${cleanClientUrl}/api/auth/jwks`));
+
+    // JWKS দিয়ে ভেরিফাই করুন
+    const { payload } = await jwtVerify(token, currentJwks, {
       algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
     });
 
@@ -480,8 +496,10 @@ const verifyToken = async (req, res, next) => {
     });
   }
 };
+
 async function run() {
   try {
+    await client.connect();
     const db = client.db("studynook");
     const roomsCollection = db.collection("rooms");
     const bookingCollection = db.collection("bookings");
@@ -493,28 +511,36 @@ async function run() {
 
     // 1. Featured Rooms
     app.get("/featured", async (req, res) => {
-      const result = await roomsCollection
-        .find()
-        .sort({ _id: -1 })
-        .limit(6)
-        .toArray();
-      res.json(result);
+      try {
+        const result = await roomsCollection
+          .find()
+          .sort({ _id: -1 })
+          .limit(6)
+          .toArray();
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ message: "Error fetching featured rooms" });
+      }
     });
 
     // 2. All Rooms
     app.get("/rooms", async (req, res) => {
-      const { search, amenity } = req.query;
-      let query = {};
+      try {
+        const { search, amenity } = req.query;
+        let query = {};
 
-      if (search) {
-        query.name = { $regex: search, $options: "i" };
-      }
-      if (amenity) {
-        query.amenities = { $in: [amenity] };
-      }
+        if (search) {
+          query.name = { $regex: search, $options: "i" };
+        }
+        if (amenity) {
+          query.amenities = { $in: [amenity] };
+        }
 
-      const result = await roomsCollection.find(query).toArray();
-      res.json(result);
+        const result = await roomsCollection.find(query).toArray();
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ message: "Error fetching rooms" });
+      }
     });
 
     // 3. My Listings 
@@ -538,13 +564,17 @@ async function run() {
     // 4. Single Room Details
     app.get("/rooms/:id", async (req, res) => {
       const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid Room ID" });
+      }
       try {
         const result = await roomsCollection.findOne({
           _id: new ObjectId(id),
         });
+        if (!result) return res.status(404).json({ message: "Room not found" });
         res.json(result);
       } catch (err) {
-        res.status(400).json({ message: "Invalid Room ID" });
+        res.status(500).json({ message: "Error fetching room details" });
       }
     });
 
@@ -598,6 +628,9 @@ async function run() {
     // 6. Update Room
     app.patch("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid Room ID" });
+      }
       const updatedData = req.body;
       const userId = getUserIdentifier(req.user);
 
@@ -616,6 +649,9 @@ async function run() {
     // 7. Delete Room
     app.delete("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid Room ID" });
+      }
       const userId = getUserIdentifier(req.user);
 
       const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
@@ -688,10 +724,12 @@ async function run() {
 
         const result = await bookingCollection.insertOne(bookingData);
 
-        await roomsCollection.updateOne(
-          { _id: new ObjectId(roomId) },
-          { $inc: { bookingCount: 1 } }
-        );
+        if (ObjectId.isValid(roomId)) {
+          await roomsCollection.updateOne(
+            { _id: new ObjectId(roomId) },
+            { $inc: { bookingCount: 1 } }
+          );
+        }
 
         res.status(201).json({ success: true, message: "Booking confirmed", result });
       } catch (error) {
@@ -702,6 +740,9 @@ async function run() {
     // 10. Update / Edit Booking
     app.patch("/bookings/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid Booking ID" });
+      }
       const { date, startTime, endTime } = req.body;
       const userId = getUserIdentifier(req.user);
 
@@ -729,6 +770,9 @@ async function run() {
     // 11. Delete Booking
     app.delete("/bookings/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid Booking ID" });
+      }
       const userId = getUserIdentifier(req.user);
 
       const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });

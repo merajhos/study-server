@@ -805,9 +805,6 @@
 
 
 
-
-
-
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
@@ -830,26 +827,59 @@ const clientUrl =
 
 const cleanClientUrl = clientUrl.replace(/\/$/, "");
 
+// =====================================================
+// CORS
+// =====================================================
+
+const allowedOrigins = [
+  cleanClientUrl,
+  "https://studybook-sand.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:5173",
+];
+
 app.use(
   cors({
-    origin: [
-      cleanClientUrl,
-      "https://studybook-sand.vercel.app",
-      "http://localhost:3000",
-      "http://localhost:5173",
-    ],
+    origin: function (origin, callback) {
+      // Postman/server request
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("Not allowed by CORS"));
+    },
+
     credentials: true,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+
+    methods: [
+      "GET",
+      "POST",
+      "PATCH",
+      "PUT",
+      "DELETE",
+      "OPTIONS",
+    ],
+
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+    ],
   })
 );
 
 app.use(express.json());
 
-
-// ===============================
+// =====================================================
 // MongoDB
-// ===============================
+// =====================================================
+
+if (!uri) {
+  console.error("MONGODB_URI is missing from environment variables");
+}
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -859,30 +889,28 @@ const client = new MongoClient(uri, {
   },
 });
 
-
-// ===============================
-// Better Auth JWT
-// ===============================
+// =====================================================
+// Better Auth JWKS
+// =====================================================
 
 let JWKS;
 
 try {
-  JWKS = createRemoteJWKSet(
-    new URL(`${cleanClientUrl}/api/auth/jwks`)
-  );
+  const jwksUrl = `${cleanClientUrl}/api/auth/jwks`;
 
-  console.log(
-    "JWKS URL:",
-    `${cleanClientUrl}/api/auth/jwks`
-  );
+  JWKS = createRemoteJWKSet(new URL(jwksUrl));
+
+  console.log("JWKS URL:", jwksUrl);
 } catch (error) {
-  console.error("JWKS initialization error:", error.message);
+  console.error(
+    "JWKS initialization error:",
+    error.message
+  );
 }
 
-
-// ===============================
-// Verify Token Middleware
-// ===============================
+// =====================================================
+// Verify Token
+// =====================================================
 
 const verifyToken = async (req, res, next) => {
   try {
@@ -890,6 +918,7 @@ const verifyToken = async (req, res, next) => {
 
     if (!authHeader) {
       return res.status(401).json({
+        success: false,
         message: "Unauthorized: No token provided",
       });
     }
@@ -903,6 +932,7 @@ const verifyToken = async (req, res, next) => {
       token === "null"
     ) {
       return res.status(401).json({
+        success: false,
         message: "Unauthorized: Invalid token format",
       });
     }
@@ -928,16 +958,16 @@ const verifyToken = async (req, res, next) => {
     console.error("JWT ERROR:", error.message);
 
     return res.status(401).json({
+      success: false,
       message: "Unauthorized: Invalid or expired token",
       error: error.message,
     });
   }
 };
 
-
-// ===============================
+// =====================================================
 // Database
-// ===============================
+// =====================================================
 
 async function run() {
   try {
@@ -950,10 +980,9 @@ async function run() {
 
     console.log("Connected successfully to MongoDB!");
 
-
-    // ===============================
+    // =================================================
     // Helper
-    // ===============================
+    // =================================================
 
     const getUserIdentifier = (user) => {
       return (
@@ -964,10 +993,9 @@ async function run() {
       );
     };
 
-
-    // ===============================
+    // =================================================
     // HOME
-    // ===============================
+    // =================================================
 
     app.get("/", (req, res) => {
       res.status(200).json({
@@ -976,33 +1004,32 @@ async function run() {
       });
     });
 
-
-    // ===============================
+    // =================================================
     // FEATURED ROOMS
-    // ===============================
+    // =================================================
 
     app.get("/featured", async (req, res) => {
       try {
         const result = await roomsCollection
-          .find()
-          .sort({ _id: -1 })
+          .find({})
+          .sort({ createdAt: -1 })
           .limit(6)
           .toArray();
 
         res.json(result);
       } catch (error) {
-        console.error(error);
+        console.error("Featured rooms error:", error);
 
         res.status(500).json({
+          success: false,
           message: "Error fetching featured rooms",
         });
       }
     });
 
-
-    // ===============================
+    // =================================================
     // ALL ROOMS
-    // ===============================
+    // =================================================
 
     app.get("/rooms", async (req, res) => {
       try {
@@ -1028,20 +1055,20 @@ async function run() {
           .sort({ createdAt: -1 })
           .toArray();
 
-        res.json(result);
+        res.status(200).json(result);
       } catch (error) {
-        console.error(error);
+        console.error("GET /rooms error:", error);
 
         res.status(500).json({
+          success: false,
           message: "Error fetching rooms",
         });
       }
     });
 
-
-    // ===============================
+    // =================================================
     // MY ROOMS
-    // ===============================
+    // =================================================
 
     app.get(
       "/rooms/my-rooms",
@@ -1061,21 +1088,24 @@ async function run() {
             .sort({ createdAt: -1 })
             .toArray();
 
-          res.json(result);
+          res.status(200).json(result);
         } catch (error) {
-          console.error(error);
+          console.error(
+            "GET /rooms/my-rooms error:",
+            error
+          );
 
           res.status(500).json({
+            success: false,
             message: "Failed to fetch user listings",
           });
         }
       }
     );
 
-
-    // ===============================
+    // =================================================
     // SINGLE ROOM
-    // ===============================
+    // =================================================
 
     app.get("/rooms/:id", async (req, res) => {
       try {
@@ -1083,6 +1113,7 @@ async function run() {
 
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({
+            success: false,
             message: "Invalid Room ID",
           });
         }
@@ -1093,24 +1124,28 @@ async function run() {
 
         if (!room) {
           return res.status(404).json({
+            success: false,
             message: "Room not found",
           });
         }
 
-        res.json(room);
+        res.status(200).json(room);
       } catch (error) {
-        console.error(error);
+        console.error(
+          "GET /rooms/:id error:",
+          error
+        );
 
         res.status(500).json({
+          success: false,
           message: "Error fetching room details",
         });
       }
     });
 
-
-    // ===============================
+    // =================================================
     // ADD ROOM
-    // ===============================
+    // =================================================
 
     app.post(
       "/rooms",
@@ -1130,7 +1165,8 @@ async function run() {
             });
           }
 
-          const userId = getUserIdentifier(req.user);
+          const userId =
+            getUserIdentifier(req.user);
 
           if (!userId) {
             return res.status(401).json({
@@ -1140,26 +1176,41 @@ async function run() {
           }
 
           const newRoom = {
-            name: roomData.name,
-            description: roomData.description,
+            name: roomData.name.trim(),
+
+            description:
+              roomData.description.trim(),
+
+            // User যেই image দিবে সেটাই save হবে
             image: roomData.image || "",
+
             floor: roomData.floor || "",
-            capacity: Number(roomData.capacity) || 0,
+
+            capacity:
+              Number(roomData.capacity) || 0,
+
             hourlyRate:
               Number(roomData.hourlyRate) || 0,
-            amenities: Array.isArray(roomData.amenities)
-              ? roomData.amenities
-              : [],
+
+            amenities:
+              Array.isArray(roomData.amenities)
+                ? roomData.amenities
+                : [],
 
             ownerId: userId,
-            userEmail: req.user?.email || "",
+
+            userEmail:
+              req.user?.email || "",
 
             bookingCount: 0,
+
             createdAt: new Date(),
           };
 
           const result =
-            await roomsCollection.insertOne(newRoom);
+            await roomsCollection.insertOne(
+              newRoom
+            );
 
           return res.status(201).json({
             success: true,
@@ -1167,7 +1218,10 @@ async function run() {
             insertedId: result.insertedId,
           });
         } catch (error) {
-          console.error("POST /rooms ERROR:", error);
+          console.error(
+            "POST /rooms ERROR:",
+            error
+          );
 
           return res.status(500).json({
             success: false,
@@ -1178,10 +1232,9 @@ async function run() {
       }
     );
 
-
-    // ===============================
+    // =================================================
     // UPDATE ROOM
-    // ===============================
+    // =================================================
 
     app.patch(
       "/rooms/:id",
@@ -1192,11 +1245,13 @@ async function run() {
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
+              success: false,
               message: "Invalid Room ID",
             });
           }
 
-          const userId = getUserIdentifier(req.user);
+          const userId =
+            getUserIdentifier(req.user);
 
           const room =
             await roomsCollection.findOne({
@@ -1205,6 +1260,7 @@ async function run() {
 
           if (!room) {
             return res.status(404).json({
+              success: false,
               message: "Room not found",
             });
           }
@@ -1214,6 +1270,7 @@ async function run() {
             room.userEmail !== req.user?.email
           ) {
             return res.status(403).json({
+              success: false,
               message:
                 "Forbidden: Not room owner",
             });
@@ -1232,7 +1289,24 @@ async function run() {
               req.body.description;
           }
 
-          if (req.body.price !== undefined) {
+          if (req.body.image !== undefined) {
+            updateData.image = req.body.image;
+          }
+
+          if (req.body.floor !== undefined) {
+            updateData.floor = req.body.floor;
+          }
+
+          if (
+            req.body.capacity !== undefined
+          ) {
+            updateData.capacity =
+              Number(req.body.capacity);
+          }
+
+          if (
+            req.body.price !== undefined
+          ) {
             updateData.hourlyRate =
               Number(req.body.price);
           }
@@ -1242,6 +1316,13 @@ async function run() {
           ) {
             updateData.hourlyRate =
               Number(req.body.hourlyRate);
+          }
+
+          if (
+            Array.isArray(req.body.amenities)
+          ) {
+            updateData.amenities =
+              req.body.amenities;
           }
 
           const result =
@@ -1254,25 +1335,28 @@ async function run() {
               }
             );
 
-          res.json({
+          res.status(200).json({
             success: true,
             message: "Room updated successfully",
             result,
           });
         } catch (error) {
-          console.error(error);
+          console.error(
+            "PATCH /rooms/:id error:",
+            error
+          );
 
           res.status(500).json({
+            success: false,
             message: "Failed to update room",
           });
         }
       }
     );
 
-
-    // ===============================
+    // =================================================
     // DELETE ROOM
-    // ===============================
+    // =================================================
 
     app.delete(
       "/rooms/:id",
@@ -1283,11 +1367,13 @@ async function run() {
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
+              success: false,
               message: "Invalid Room ID",
             });
           }
 
-          const userId = getUserIdentifier(req.user);
+          const userId =
+            getUserIdentifier(req.user);
 
           const room =
             await roomsCollection.findOne({
@@ -1296,6 +1382,7 @@ async function run() {
 
           if (!room) {
             return res.status(404).json({
+              success: false,
               message: "Room not found",
             });
           }
@@ -1305,6 +1392,7 @@ async function run() {
             room.userEmail !== req.user?.email
           ) {
             return res.status(403).json({
+              success: false,
               message:
                 "Forbidden: Not room owner",
             });
@@ -1315,33 +1403,39 @@ async function run() {
               _id: new ObjectId(id),
             });
 
-          res.json({
+          res.status(200).json({
             success: true,
             message: "Room deleted successfully",
             result,
           });
         } catch (error) {
-          console.error(error);
+          console.error(
+            "DELETE /rooms/:id error:",
+            error
+          );
 
           res.status(500).json({
+            success: false,
             message: "Failed to delete room",
           });
         }
       }
     );
 
-
-    // ===============================
+    // =================================================
     // MY BOOKINGS
-    // ===============================
+    // =================================================
 
     app.get(
       "/bookings/my-bookings",
       verifyToken,
       async (req, res) => {
         try {
-          const userId = getUserIdentifier(req.user);
-          const userEmail = req.user?.email;
+          const userId =
+            getUserIdentifier(req.user);
+
+          const userEmail =
+            req.user?.email;
 
           const bookings =
             await bookingCollection
@@ -1354,11 +1448,15 @@ async function run() {
               .sort({ createdAt: -1 })
               .toArray();
 
-          res.json(bookings);
+          res.status(200).json(bookings);
         } catch (error) {
-          console.error(error);
+          console.error(
+            "GET /bookings/my-bookings error:",
+            error
+          );
 
           res.status(500).json({
+            success: false,
             message: "Error fetching bookings",
             error: error.message,
           });
@@ -1366,10 +1464,9 @@ async function run() {
       }
     );
 
-
-    // ===============================
+    // =================================================
     // CREATE BOOKING
-    // ===============================
+    // =================================================
 
     app.post(
       "/bookings",
@@ -1379,6 +1476,7 @@ async function run() {
           const {
             roomId,
             roomName,
+            roomImage,
             date,
             startTime,
             endTime,
@@ -1396,6 +1494,7 @@ async function run() {
             !endTime
           ) {
             return res.status(400).json({
+              success: false,
               message:
                 "All booking details are required",
             });
@@ -1403,13 +1502,36 @@ async function run() {
 
           if (startTime >= endTime) {
             return res.status(400).json({
+              success: false,
               message:
                 "End time must be after start time",
             });
           }
 
+          // ---------------------------------------------
+          // Check room exists
+          // ---------------------------------------------
 
-          // Proper overlap check
+          let room = null;
+
+          if (ObjectId.isValid(roomId)) {
+            room =
+              await roomsCollection.findOne({
+                _id: new ObjectId(roomId),
+              });
+          }
+
+          if (!room) {
+            return res.status(404).json({
+              success: false,
+              message: "Room not found",
+            });
+          }
+
+          // ---------------------------------------------
+          // Check booking conflict
+          // ---------------------------------------------
+
           const existingConflict =
             await bookingCollection.findOne({
               roomId,
@@ -1427,17 +1549,29 @@ async function run() {
 
           if (existingConflict) {
             return res.status(400).json({
+              success: false,
               message:
                 "Slot already booked for this room.",
             });
           }
 
+          // ---------------------------------------------
+          // Create booking
+          // ---------------------------------------------
 
           const bookingData = {
             roomId,
 
             roomName:
-              roomName || "Study Room",
+              roomName ||
+              room.name ||
+              "Study Room",
+
+            // Important: room image save হবে
+            roomImage:
+              roomImage ||
+              room.image ||
+              "",
 
             userId,
 
@@ -1445,7 +1579,9 @@ async function run() {
               req.user?.email || "",
 
             date,
+
             startTime,
+
             endTime,
 
             timeSlot:
@@ -1462,26 +1598,25 @@ async function run() {
             createdAt: new Date(),
           };
 
-
           const result =
             await bookingCollection.insertOne(
               bookingData
             );
 
+          // ---------------------------------------------
+          // Increase booking count
+          // ---------------------------------------------
 
-          if (ObjectId.isValid(roomId)) {
-            await roomsCollection.updateOne(
-              {
-                _id: new ObjectId(roomId),
+          await roomsCollection.updateOne(
+            {
+              _id: new ObjectId(roomId),
+            },
+            {
+              $inc: {
+                bookingCount: 1,
               },
-              {
-                $inc: {
-                  bookingCount: 1,
-                },
-              }
-            );
-          }
-
+            }
+          );
 
           res.status(201).json({
             success: true,
@@ -1495,6 +1630,7 @@ async function run() {
           );
 
           res.status(500).json({
+            success: false,
             message: "Failed to book room",
             error: error.message,
           });
@@ -1502,10 +1638,9 @@ async function run() {
       }
     );
 
-
-    // ===============================
+    // =================================================
     // UPDATE BOOKING
-    // ===============================
+    // =================================================
 
     app.patch(
       "/bookings/:id",
@@ -1516,6 +1651,7 @@ async function run() {
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
+              success: false,
               message: "Invalid Booking ID",
             });
           }
@@ -1530,6 +1666,7 @@ async function run() {
 
           if (!booking) {
             return res.status(404).json({
+              success: false,
               message: "Booking not found",
             });
           }
@@ -1539,6 +1676,7 @@ async function run() {
             booking.userEmail !== req.user?.email
           ) {
             return res.status(403).json({
+              success: false,
               message: "Forbidden",
             });
           }
@@ -1554,6 +1692,17 @@ async function run() {
             req.body.startTime &&
             req.body.endTime
           ) {
+            if (
+              req.body.startTime >=
+              req.body.endTime
+            ) {
+              return res.status(400).json({
+                success: false,
+                message:
+                  "End time must be after start time",
+              });
+            }
+
             updateFields.startTime =
               req.body.startTime;
 
@@ -1574,24 +1723,28 @@ async function run() {
               }
             );
 
-          res.json({
+          res.status(200).json({
             success: true,
+            message: "Booking updated successfully",
             result,
           });
         } catch (error) {
-          console.error(error);
+          console.error(
+            "PATCH /bookings/:id error:",
+            error
+          );
 
           res.status(500).json({
+            success: false,
             message: "Failed to update booking",
           });
         }
       }
     );
 
-
-    // ===============================
-    // DELETE BOOKING
-    // ===============================
+    // =================================================
+    // DELETE / CANCEL BOOKING
+    // =================================================
 
     app.delete(
       "/bookings/:id",
@@ -1602,6 +1755,7 @@ async function run() {
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
+              success: false,
               message: "Invalid Booking ID",
             });
           }
@@ -1616,6 +1770,7 @@ async function run() {
 
           if (!booking) {
             return res.status(404).json({
+              success: false,
               message: "Booking not found",
             });
           }
@@ -1625,6 +1780,7 @@ async function run() {
             booking.userEmail !== req.user?.email
           ) {
             return res.status(403).json({
+              success: false,
               message: "Forbidden",
             });
           }
@@ -1634,23 +1790,45 @@ async function run() {
               _id: new ObjectId(id),
             });
 
-          res.json({
+          // Decrease booking count
+          if (
+            booking.roomId &&
+            ObjectId.isValid(booking.roomId)
+          ) {
+            await roomsCollection.updateOne(
+              {
+                _id: new ObjectId(
+                  booking.roomId
+                ),
+              },
+              {
+                $inc: {
+                  bookingCount: -1,
+                },
+              }
+            );
+          }
+
+          res.status(200).json({
             success: true,
             message:
               "Booking cancelled successfully",
             result,
           });
         } catch (error) {
-          console.error(error);
+          console.error(
+            "DELETE /bookings/:id error:",
+            error
+          );
 
           res.status(500).json({
+            success: false,
             message:
               "Failed to cancel booking",
           });
         }
       }
     );
-
   } catch (error) {
     console.error(
       "MongoDB Connection Error:",
@@ -1659,8 +1837,18 @@ async function run() {
   }
 }
 
+// Start database
 run().catch(console.dir);
 
+// =====================================================
+// Vercel / Root
+// =====================================================
 
-// Export Express app for Vercel
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "StudyNook backend is running!",
+  });
+});
+
 module.exports = app;

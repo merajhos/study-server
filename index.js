@@ -455,44 +455,31 @@ const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
-    console.log("AUTH HEADER:", authHeader ? "Token received" : "NO TOKEN");
-
     if (!authHeader) {
-      return res.status(401).json({
-        message: "Unauthorized: No token provided",
-      });
+      return res.status(401).json({ message: "Unauthorized: No token provided" });
     }
 
     const [type, token] = authHeader.split(" ");
 
     if (type !== "Bearer" || !token || token === "undefined") {
-      return res.status(401).json({
-        message: "Unauthorized: Invalid token format",
-      });
+      return res.status(401).json({ message: "Unauthorized: Invalid token format" });
     }
 
+    // JWKS দিয়ে ভেরিফাই করুন
     const { payload } = await jwtVerify(token, JWKS, {
       algorithms: ["EdDSA", "RS256", "ES256", "HS256"],
     });
 
-    console.log("JWT PAYLOAD SUCCESS:", payload);
-
     req.user = payload;
     next();
   } catch (error) {
-    console.error("========== JWT ERROR ==========");
-    console.error("NAME:", error.name);
-    console.error("MESSAGE:", error.message);
-    console.error("CODE:", error.code);
-    console.error("==============================");
-
+    console.error("JWT ERROR:", error.message);
     return res.status(401).json({
       message: "Unauthorized: Invalid or expired token",
       error: error.message,
     });
   }
 };
-
 async function run() {
   try {
     const db = client.db("studynook");

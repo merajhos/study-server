@@ -1873,6 +1873,29 @@
 
 
 
+// {
+//   "version": 2,
+//   "builds": [
+//     {
+//       "src": "index.js",
+//       "use": "@vercel/node"
+//     }
+//   ],
+//   "routes": [
+//     {
+//       "src": "/(.*)",
+//       "dest": "/index.js"
+     
+//     }
+//   ]
+// }
+
+
+
+
+
+
+
 
 
 
@@ -1910,7 +1933,31 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const uri = process.env.MONGODB_URI;
 
-app.use(cors());
+// =====================================================
+// Dynamic CORS Options Configuration
+// =====================================================
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://studybook-sand.vercel.app",
+  process.env.CLIENT_URL,
+].filter(Boolean); // undefined বা খালি মান ফিল্টার করার জন্য
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Server-to-server বা Postman রিকোয়েস্টে origin থাকে না
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error("CORS Not Allowed"));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
 app.use(express.json());
 
 const client = new MongoClient(uri, {

@@ -2231,8 +2231,8 @@ const client = new MongoClient(uri, {
    BETTER AUTH JWKS
 ========================= */
 
-const authUrl =
-  process.env.CLIENT_URL || "https://studybook-sand.vercel.app";
+const authUrl = 
+  process.env.CLIENT_URL;
 
 const JWKS = createRemoteJWKSet(
   new URL(`${authUrl}/api/auth/jwks`)

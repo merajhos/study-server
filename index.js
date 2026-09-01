@@ -1906,9 +1906,9 @@ const { createRemoteJWKSet, jwtVerify } = require("jose");
 
 dotenv.config();
 
-const uri = process.env.MONGODB_URI;
 const app = express();
 const PORT = process.env.PORT || 5000;
+const uri = process.env.MONGODB_URI;
 
 app.use(cors());
 app.use(express.json());
@@ -1921,10 +1921,12 @@ const client = new MongoClient(uri, {
   },
 });
 
+// Better Auth JWKS Integration
 const JWKS = createRemoteJWKSet(
-  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
+  new URL(`${process.env.CLIENT_URL || "https://studybook-sand.vercel.app"}/api/auth/jwks`)
 );
 
+// Verify Token Middleware
 const verifyToken = async (req, res, next) => {
   const authHeader = req?.headers.authorization;
   if (!authHeader) {
@@ -1937,92 +1939,205 @@ const verifyToken = async (req, res, next) => {
   }
 
   try {
-    const { payload } = await jwtVerify(token, JWKS);
+    const { payload } = await jwtVerify(token, JWKS, {
+      algorithms: ["EdDSA"],
+    });
     req.user = payload;
     next();
   } catch (error) {
-    return res.status(403).json({ message: "Forbidden" });
+    return res.status(403).json({ message: "Forbidden", error: error.message });
   }
 };
 
 async function run() {
   try {
-    const db = client.db("wanderlust");
-    const destinationCollection = db.collection("destinations");
-    const bookingCollection = db.collection("booking");
+    // await client.connect();
 
-    app.get("/feature", async (req, res) => {
-      const result = await destinationCollection.find().limit(4).toArray();
+    const db = client.db("studynook");
+    const roomsCollection = db.collection("rooms");
+    const bookingCollection = db.collection("bookings");
+
+    // ================= ROOMS API =================
+
+    // Featured Rooms
+    app.get("/featured", async (req, res) => {
+      const result = await roomsCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
       res.json(result);
     });
 
-    app.get("/destination", async (req, res) => {
-      const result = await destinationCollection.find().toArray();
+    // Get All Rooms (Search & Amenity Filter)
+    app.get("/rooms", async (req, res) => {
+      const { search, amenity } = req.query;
+      const query = {};
+
+      if (search) {
+        query.name = { $regex: search, $options: "i" };
+      }
+      if (amenity) {
+        query.amenities = { $in: [amenity] };
+      }
+
+      const result = await roomsCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
       res.json(result);
     });
 
-    app.post("/destination", async (req, res) => {
-      const destinationData = req.body;
-      const result = await destinationCollection.insertOne(destinationData);
+    // Get My Rooms
+    app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
+      const userId = req.user?.id || req.user?.sub;
+      const userEmail = req.user?.email;
+
+      const result = await roomsCollection
+        .find({
+          $or: [{ ownerId: userId }, { userEmail: userEmail }],
+        })
+        .toArray();
       res.json(result);
     });
 
-    app.get("/destination/:id", verifyToken, async (req, res) => {
+    // Single Room Details
+    app.get("/rooms/:id", async (req, res) => {
       const { id } = req.params;
-      const result = await destinationCollection.findOne({
-        _id: new ObjectId(id),
-      });
+      const result = await roomsCollection.findOne({ _id: new ObjectId(id) });
       res.json(result);
     });
 
-    app.patch("/destination/:id", async (req, res) => {
+    // Add New Room
+    app.post("/rooms", verifyToken, async (req, res) => {
+      const roomData = req.body;
+      const userId = req.user?.id || req.user?.sub;
+
+      const newRoom = {
+        ...roomData,
+        capacity: Number(roomData.capacity) || 0,
+        hourlyRate: Number(roomData.hourlyRate) || 0,
+        ownerId: userId,
+        userEmail: req.user?.email || "",
+        bookingCount: 0,
+        createdAt: new Date(),
+      };
+
+      const result = await roomsCollection.insertOne(newRoom);
+      res.json(result);
+    });
+
+    // Update Room
+    app.patch("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
       const updatedData = req.body;
-      const result = await destinationCollection.updateOne(
+
+      const result = await roomsCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: updatedData }
       );
       res.json(result);
     });
 
-    app.delete("/destination/:id", async (req, res) => {
+    // Delete Room
+    app.delete("/rooms/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
-      const result = await destinationCollection.deleteOne({
-        _id: new ObjectId(id),
-      });
+      const result = await roomsCollection.deleteOne({ _id: new ObjectId(id) });
       res.json(result);
     });
 
-    app.post("/booking", verifyToken, async (req, res) => {
+    // ================= BOOKINGS API =================
+
+    // Get My Bookings
+    app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
+      const userId = req.user?.id || req.user?.sub;
+      const userEmail = req.user?.email;
+
+      const result = await bookingCollection
+        .find({
+          $or: [{ userId: userId }, { userEmail: userEmail }],
+        })
+        .toArray();
+      res.json(result);
+    });
+
+    // Create Booking
+    app.post("/bookings", verifyToken, async (req, res) => {
       const bookingData = req.body;
-      const result = await bookingCollection.insertOne(bookingData);
-      res.json(result);
-    });
+      const userId = req.user?.id || req.user?.sub;
 
-    app.get("/booking/:userId", async (req, res) => {
-      const { userId } = req.params;
-      const result = await bookingCollection.find({ userId }).toArray();
-      res.json(result);
-    });
-
-    app.delete("/booking/:bookingId", verifyToken, async (req, res) => {
-      const { bookingId } = req.params;
-      const result = await bookingCollection.deleteOne({
-        _id: new ObjectId(bookingId),
+      // Slot Conflict Checking
+      const existingConflict = await bookingCollection.findOne({
+        roomId: bookingData.roomId,
+        date: bookingData.date,
+        startTime: { $lt: bookingData.endTime },
+        endTime: { $gt: bookingData.startTime },
       });
+
+      if (existingConflict) {
+        return res.status(400).json({ message: "Slot already booked for this room." });
+      }
+
+      const finalBooking = {
+        ...bookingData,
+        userId,
+        userEmail: req.user?.email || "",
+        status: "confirmed",
+        createdAt: new Date(),
+      };
+
+      const result = await bookingCollection.insertOne(finalBooking);
+
+      // Increase booking count in room
+      if (bookingData.roomId && ObjectId.isValid(bookingData.roomId)) {
+        await roomsCollection.updateOne(
+          { _id: new ObjectId(bookingData.roomId) },
+          { $inc: { bookingCount: 1 } }
+        );
+      }
+
       res.json(result);
     });
 
-    console.log("Successfully connected to MongoDB!");
-  } catch (err) {
-    console.error(err);
+    // Update Booking
+    app.patch("/bookings/:id", verifyToken, async (req, res) => {
+      const { id } = req.params;
+      const updateFields = req.body;
+
+      const result = await bookingCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updateFields }
+      );
+      res.json(result);
+    });
+
+    // Delete Booking
+    app.delete("/bookings/:id", verifyToken, async (req, res) => {
+      const { id } = req.params;
+      const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
+
+      const result = await bookingCollection.deleteOne({ _id: new ObjectId(id) });
+
+      // Decrease booking count in room
+      if (booking?.roomId && ObjectId.isValid(booking.roomId)) {
+        await roomsCollection.updateOne(
+          { _id: new ObjectId(booking.roomId) },
+          { $inc: { bookingCount: -1 } }
+        );
+      }
+
+      res.json(result);
+    });
+
+    console.log("Pinged your deployment. Connected to MongoDB!");
+  } finally {
+    // await client.close();
   }
 }
-
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("Server is running fine!");
+  res.send("StudyNook Backend running fine!");
 });
 
 app.listen(PORT, () => {

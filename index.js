@@ -1873,29 +1873,6 @@
 
 
 
-// {
-//   "version": 2,
-//   "builds": [
-//     {
-//       "src": "index.js",
-//       "use": "@vercel/node"
-//     }
-//   ],
-//   "routes": [
-//     {
-//       "src": "/(.*)",
-//       "dest": "/index.js"
-     
-//     }
-//   ]
-// }
-
-
-
-
-
-
-
 
 
 
@@ -1929,35 +1906,11 @@ const { createRemoteJWKSet, jwtVerify } = require("jose");
 
 dotenv.config();
 
+const uri = process.env.MONGODB_URI;
 const app = express();
 const PORT = process.env.PORT || 5000;
-const uri = process.env.MONGODB_URI;
 
-// =====================================================
-// Dynamic CORS Options Configuration
-// =====================================================
-const allowedOrigins = [
-  "http://localhost:3000",
-  "http://localhost:5173",
-  "https://studybook-sand.vercel.app",
-  process.env.CLIENT_URL,
-].filter(Boolean); // undefined বা খালি মান ফিল্টার করার জন্য
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Server-to-server বা Postman রিকোয়েস্টে origin থাকে না
-      if (!origin || allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error("CORS Not Allowed"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
+app.use(cors());
 app.use(express.json());
 
 const client = new MongoClient(uri, {
@@ -1968,12 +1921,10 @@ const client = new MongoClient(uri, {
   },
 });
 
-// Better Auth JWKS Integration
 const JWKS = createRemoteJWKSet(
-  new URL(`${process.env.CLIENT_URL || "https://studybook-sand.vercel.app"}/api/auth/jwks`)
+  new URL(`${process.env.CLIENT_URL}/api/auth/jwks`)
 );
 
-// Verify Token Middleware
 const verifyToken = async (req, res, next) => {
   const authHeader = req?.headers.authorization;
   if (!authHeader) {
@@ -1986,205 +1937,92 @@ const verifyToken = async (req, res, next) => {
   }
 
   try {
-    const { payload } = await jwtVerify(token, JWKS, {
-      algorithms: ["EdDSA"],
-    });
+    const { payload } = await jwtVerify(token, JWKS);
     req.user = payload;
     next();
   } catch (error) {
-    return res.status(403).json({ message: "Forbidden", error: error.message });
+    return res.status(403).json({ message: "Forbidden" });
   }
 };
 
 async function run() {
   try {
-    // await client.connect();
+    const db = client.db("wanderlust");
+    const destinationCollection = db.collection("destinations");
+    const bookingCollection = db.collection("booking");
 
-    const db = client.db("studynook");
-    const roomsCollection = db.collection("rooms");
-    const bookingCollection = db.collection("bookings");
-
-    // ================= ROOMS API =================
-
-    // Featured Rooms
-    app.get("/featured", async (req, res) => {
-      const result = await roomsCollection
-        .find()
-        .sort({ createdAt: -1 })
-        .limit(6)
-        .toArray();
+    app.get("/feature", async (req, res) => {
+      const result = await destinationCollection.find().limit(4).toArray();
       res.json(result);
     });
 
-    // Get All Rooms (Search & Amenity Filter)
-    app.get("/rooms", async (req, res) => {
-      const { search, amenity } = req.query;
-      const query = {};
-
-      if (search) {
-        query.name = { $regex: search, $options: "i" };
-      }
-      if (amenity) {
-        query.amenities = { $in: [amenity] };
-      }
-
-      const result = await roomsCollection
-        .find(query)
-        .sort({ createdAt: -1 })
-        .toArray();
+    app.get("/destination", async (req, res) => {
+      const result = await destinationCollection.find().toArray();
       res.json(result);
     });
 
-    // Get My Rooms
-    app.get("/rooms/my-rooms", verifyToken, async (req, res) => {
-      const userId = req.user?.id || req.user?.sub;
-      const userEmail = req.user?.email;
-
-      const result = await roomsCollection
-        .find({
-          $or: [{ ownerId: userId }, { userEmail: userEmail }],
-        })
-        .toArray();
+    app.post("/destination", async (req, res) => {
+      const destinationData = req.body;
+      const result = await destinationCollection.insertOne(destinationData);
       res.json(result);
     });
 
-    // Single Room Details
-    app.get("/rooms/:id", async (req, res) => {
+    app.get("/destination/:id", verifyToken, async (req, res) => {
       const { id } = req.params;
-      const result = await roomsCollection.findOne({ _id: new ObjectId(id) });
+      const result = await destinationCollection.findOne({
+        _id: new ObjectId(id),
+      });
       res.json(result);
     });
 
-    // Add New Room
-    app.post("/rooms", verifyToken, async (req, res) => {
-      const roomData = req.body;
-      const userId = req.user?.id || req.user?.sub;
-
-      const newRoom = {
-        ...roomData,
-        capacity: Number(roomData.capacity) || 0,
-        hourlyRate: Number(roomData.hourlyRate) || 0,
-        ownerId: userId,
-        userEmail: req.user?.email || "",
-        bookingCount: 0,
-        createdAt: new Date(),
-      };
-
-      const result = await roomsCollection.insertOne(newRoom);
-      res.json(result);
-    });
-
-    // Update Room
-    app.patch("/rooms/:id", verifyToken, async (req, res) => {
+    app.patch("/destination/:id", async (req, res) => {
       const { id } = req.params;
       const updatedData = req.body;
-
-      const result = await roomsCollection.updateOne(
+      const result = await destinationCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: updatedData }
       );
       res.json(result);
     });
 
-    // Delete Room
-    app.delete("/rooms/:id", verifyToken, async (req, res) => {
+    app.delete("/destination/:id", async (req, res) => {
       const { id } = req.params;
-      const result = await roomsCollection.deleteOne({ _id: new ObjectId(id) });
-      res.json(result);
-    });
-
-    // ================= BOOKINGS API =================
-
-    // Get My Bookings
-    app.get("/bookings/my-bookings", verifyToken, async (req, res) => {
-      const userId = req.user?.id || req.user?.sub;
-      const userEmail = req.user?.email;
-
-      const result = await bookingCollection
-        .find({
-          $or: [{ userId: userId }, { userEmail: userEmail }],
-        })
-        .toArray();
-      res.json(result);
-    });
-
-    // Create Booking
-    app.post("/bookings", verifyToken, async (req, res) => {
-      const bookingData = req.body;
-      const userId = req.user?.id || req.user?.sub;
-
-      // Slot Conflict Checking
-      const existingConflict = await bookingCollection.findOne({
-        roomId: bookingData.roomId,
-        date: bookingData.date,
-        startTime: { $lt: bookingData.endTime },
-        endTime: { $gt: bookingData.startTime },
+      const result = await destinationCollection.deleteOne({
+        _id: new ObjectId(id),
       });
-
-      if (existingConflict) {
-        return res.status(400).json({ message: "Slot already booked for this room." });
-      }
-
-      const finalBooking = {
-        ...bookingData,
-        userId,
-        userEmail: req.user?.email || "",
-        status: "confirmed",
-        createdAt: new Date(),
-      };
-
-      const result = await bookingCollection.insertOne(finalBooking);
-
-      // Increase booking count in room
-      if (bookingData.roomId && ObjectId.isValid(bookingData.roomId)) {
-        await roomsCollection.updateOne(
-          { _id: new ObjectId(bookingData.roomId) },
-          { $inc: { bookingCount: 1 } }
-        );
-      }
-
       res.json(result);
     });
 
-    // Update Booking
-    app.patch("/bookings/:id", verifyToken, async (req, res) => {
-      const { id } = req.params;
-      const updateFields = req.body;
-
-      const result = await bookingCollection.updateOne(
-        { _id: new ObjectId(id) },
-        { $set: updateFields }
-      );
+    app.post("/booking", verifyToken, async (req, res) => {
+      const bookingData = req.body;
+      const result = await bookingCollection.insertOne(bookingData);
       res.json(result);
     });
 
-    // Delete Booking
-    app.delete("/bookings/:id", verifyToken, async (req, res) => {
-      const { id } = req.params;
-      const booking = await bookingCollection.findOne({ _id: new ObjectId(id) });
-
-      const result = await bookingCollection.deleteOne({ _id: new ObjectId(id) });
-
-      // Decrease booking count in room
-      if (booking?.roomId && ObjectId.isValid(booking.roomId)) {
-        await roomsCollection.updateOne(
-          { _id: new ObjectId(booking.roomId) },
-          { $inc: { bookingCount: -1 } }
-        );
-      }
-
+    app.get("/booking/:userId", async (req, res) => {
+      const { userId } = req.params;
+      const result = await bookingCollection.find({ userId }).toArray();
       res.json(result);
     });
 
-    console.log("Pinged your deployment. Connected to MongoDB!");
-  } finally {
-    // await client.close();
+    app.delete("/booking/:bookingId", verifyToken, async (req, res) => {
+      const { bookingId } = req.params;
+      const result = await bookingCollection.deleteOne({
+        _id: new ObjectId(bookingId),
+      });
+      res.json(result);
+    });
+
+    console.log("Successfully connected to MongoDB!");
+  } catch (err) {
+    console.error(err);
   }
 }
+
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("StudyNook Backend running fine!");
+  res.send("Server is running fine!");
 });
 
 app.listen(PORT, () => {
